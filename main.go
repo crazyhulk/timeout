@@ -27,17 +27,13 @@ var (
 // Usage is a replacement usage function for the flags package.
 func Usage() {
 	fmt.Fprintf(os.Stderr, "Usage of timeout:\n")
-	fmt.Fprintf(os.Stderr, "\tstringer [flags] -type T [directory]\n")
-	fmt.Fprintf(os.Stderr, "\tstringer [flags] -type T files... # Must be a single package\n")
-	fmt.Fprintf(os.Stderr, "For more information, see:\n")
-	fmt.Fprintf(os.Stderr, "\thttps://pkg.go.dev/golang.org/x/tools/cmd/stringer\n")
-	fmt.Fprintf(os.Stderr, "Flags:\n")
+	fmt.Fprintf(os.Stderr, "\ttimeout [flags] -type T [directory]\n")
 	flag.PrintDefaults()
 }
 
 func main() {
 	log.SetFlags(0)
-	log.SetPrefix("stringer: ")
+	log.SetPrefix("timeout: ")
 	flag.Usage = Usage
 	flag.Parse()
 
@@ -471,15 +467,27 @@ func (g *Generator) genTimeFunc(fn *ast.FuncDecl) {
 	res := []string{}
 	if fn.Type.Results != nil {
 		for _, v := range fn.Type.Results.List {
+			typ := formatExpr(v.Type)
 			for _, n := range v.Names {
 				res = append(res, n.Name)
+				switch v.Type.(type) {
+				case *ast.MapType, *ast.SliceExpr:
+					g.Printf("\t%s = make(%s)\n", n.Name, typ)
+				default:
+				}
 			}
 		}
 
 		if len(res) == 0 {
 			for i, v := range fn.Type.Results.List {
 				res = append(res, "r"+fmt.Sprint(i))
-				g.Printf("\tvar r%d %s\n", i, formatExpr(v.Type))
+				typ := formatExpr(v.Type)
+				switch v.Type.(type) {
+				case *ast.MapType, *ast.SliceExpr:
+					g.Printf("\tvar r%d %s = make(%s)\n", i, typ, typ)
+				default:
+					g.Printf("\tvar r%d %s\n", i, typ)
+				}
 			}
 		}
 	}
