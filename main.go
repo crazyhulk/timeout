@@ -236,20 +236,24 @@ func (g *Generator) parsePackage(patterns []string, tags []string) {
 			// 遍历文件中的声明
 			for _, decl := range syntax.Decls {
 				// 只处理函数声明
-				if funcDecl, ok := decl.(*ast.FuncDecl); ok {
-					// 检查函数声明中的注释
-					if funcDecl.Doc != nil {
-						for _, comment := range funcDecl.Doc.List {
-							// 查找 go:generate timeout 指令
-							if strings.HasPrefix(comment.Text, "// @timeout") {
-								// fmt.Printf("======%+v\n", len(funcDecl.Doc.List))
-								pos := pkg.Fset.Position(funcDecl.Pos())
-								fmt.Printf("Found @timeout in %s at line %d for function %s: %s, type:%+v\n",
-									pos.Filename, pos.Line, funcDecl.Name.Name, comment.Text, funcDecl.Type)
-								g.timeFuncs = append(g.timeFuncs, funcDecl)
-							}
-						}
+				funcDecl, ok := decl.(*ast.FuncDecl)
+				if !ok {
+					continue
+				}
+				// 检查函数声明中的注释
+				if funcDecl.Doc == nil {
+					continue
+
+				}
+				for _, comment := range funcDecl.Doc.List {
+					// 查找 go:generate timeout 指令
+					if strings.HasPrefix(comment.Text, "// @timeout") {
+						continue
 					}
+					pos := pkg.Fset.Position(funcDecl.Pos())
+					fmt.Printf("Found @timeout in %s at line %d for function %s: %s, type:%+v\n",
+						pos.Filename, pos.Line, funcDecl.Name.Name, comment.Text, funcDecl.Type)
+					g.timeFuncs = append(g.timeFuncs, funcDecl)
 				}
 			}
 		}
