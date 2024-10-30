@@ -1,9 +1,8 @@
-# timeout [中文](./README-cn.md)
+# timeout
 
-Implement function-level timeout control in Golang, minimizing the code into business logic.
+golang 实现函数级的超时控制, 尽量减少业务代码的入侵性.
 
 原理参考[go 业务超时控制](https://xizi.in/go/timeout.html).
-
 
 ``` go
 // @timeout
@@ -12,7 +11,7 @@ func GetByID(id int) (string, error) {
 }
 ```
 
-Exec `timeout .` The following code will be generated.
+执行 timeout . 会生成如下代码:
 ``` go
 func GetByIDWithTimeout(id int, timeout time.Duration) (string, error) {
 	if timeout == 0 {
@@ -42,16 +41,16 @@ func GetByIDWithTimeout(id int, timeout time.Duration) (string, error) {
 }
 ```
 
-When adjusting the business code, you only need to change `GetByID(1)` to `GetByIDWithTimeout(1, time.Second)`.
+调整业务代码的时候也只需要把 `GetByID(1)` ==> `GetByIDWithTimeout(1, time.Second)`.
 
 
-## How to use?
+## 使用方法
 
-Add the comment // @timeout to the functions that require timeout control, and then execute.
+在需要添加超时控制的函数上加上注释 `// @timeout` 然后执行
 
 `timeout .`
 
-## How to install?
+## 安装方法
 
 ``` bash
 go install github.com/crazyhulk/timeout@latest
