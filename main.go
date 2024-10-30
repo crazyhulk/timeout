@@ -292,34 +292,33 @@ func (g *Generator) genImports() {
 	for _, fn := range g.timeFuncs {
 		if fn.Type.Params != nil {
 			for _, field := range fn.Type.Params.List {
-				if id, ok := field.Type.(*ast.SelectorExpr); ok {
-					packageName := id.X.(*ast.Ident).Name
-					if packageName == "context" || packageName == "time" {
-						continue
-					}
-					for _, p := range g.pkg.impts {
-						if strings.HasSuffix(p.PkgPath, packageName) {
-							g.Printf("import \"%s\"\n", p.PkgPath)
+				typ := g.pkg.typeInfo.TypeOf(field.Type)
+				if named, ok := typ.(*types.Named); ok {
+					obj := named.Obj()
+					if obj != nil && obj.Pkg() != nil {
+						packageName := obj.Name()
+						if packageName == "Context" || packageName == "Time" {
+							continue
 						}
-					}
 
+						g.Printf("import \"%s\"\n", obj.Pkg().Path())
+					}
 				}
 			}
 		}
 		if fn.Type.Results != nil {
 			for _, field := range fn.Type.Results.List {
-				if id, ok := field.Type.(*ast.SelectorExpr); ok {
-					packageName := id.X.(*ast.Ident).Name
-					if packageName == "context" || packageName == "time" {
-						continue
-					}
-
-					for _, p := range g.pkg.impts {
-						if strings.HasSuffix(p.PkgPath, packageName) {
-							g.Printf("import \"%s\"\n", p.PkgPath)
+				typ := g.pkg.typeInfo.TypeOf(field.Type)
+				if named, ok := typ.(*types.Named); ok {
+					obj := named.Obj()
+					if obj != nil && obj.Pkg() != nil {
+						packageName := obj.Name()
+						if packageName == "Context" || packageName == "Time" {
+							continue
 						}
-					}
 
+						g.Printf("import \"%s\"\n", obj.Pkg().Path())
+					}
 				}
 			}
 		}
@@ -513,7 +512,11 @@ func (g *Generator) genTimeFunc(fn *ast.FuncDecl) {
 	} else {
 		// if last result is error, return it
 		if id, ok := fn.Type.Results.List[len(fn.Type.Results.List)-1].Type.(*ast.Ident); ok && id.Name == "error" {
-			g.Printf("\t\t\treturn %s, ErrTimeout\n", strings.Join(res[:len(res)-1], ", "))
+			if len(fn.Type.Results.List) > 1 {
+				g.Printf("\t\t\treturn %s, ErrTimeout\n", strings.Join(res[:len(res)-1], ", "))
+			} else if len(fn.Type.Results.List) == 1 {
+				g.Printf("\t\t\treturn ErrTimeout\n")
+			}
 		} else {
 			g.Printf("\t\t\treturn %s\n", strings.Join(res, ", "))
 		}
