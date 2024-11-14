@@ -148,8 +148,10 @@ func (g *Generator) genForPath(dir string, args, tags []string) {
 	g.Printf("\n")
 
 	for _, fd := range g.timeFuncs {
-		g.genTimeFunc(fd)
-		g.Printf("\n")
+		for _, fn := range fd.fns {
+			g.genTimeFunc(fn)
+			g.Printf("\n")
+		}
 	}
 
 	// Format the output.
@@ -178,13 +180,36 @@ func isDirectory(name string) bool {
 	return info.IsDir()
 }
 
+type timeFunc struct {
+	fns  []*ast.FuncDecl
+	file *ast.File
+}
+
+// ImportAliasMap 存储 import 路径和别名的映射关系
+type ImportAliasMap map[string]string
+
+// 从 AST 文件中提取 import 别名信息
+func (t timeFunc) getImportAliases() ImportAliasMap {
+	aliases := ImportAliasMap{}
+	for _, imp := range t.file.Imports {
+		path := imp.Path.Value[1 : len(imp.Path.Value)-1] // 去掉引号
+		alias := ""
+		if imp.Name != nil {
+			alias = imp.Name.Name
+		}
+		aliases[path] = alias
+	}
+	return aliases
+}
+
 // Generator holds the state of the analysis. Primarily used to buffer
 // the output for format.Source.
 type Generator struct {
-	buf bytes.Buffer // Accumulated output.
-	pkg *Package     // Package we are scanning.
+	rawPkg *packages.Package
+	buf    bytes.Buffer // Accumulated output.
+	pkg    *Package     // Package we are scanning.
 
-	timeFuncs []*ast.FuncDecl
+	timeFuncs []timeFunc
 
 	trimPrefix  string
 	lineComment bool
@@ -233,6 +258,10 @@ func (g *Generator) parsePackage(patterns []string, tags []string) {
 	for _, pkg := range pkgs {
 		// 遍历包中的每个 Go 文件
 		for _, syntax := range pkg.Syntax {
+			t := timeFunc{
+				fns:  []*ast.FuncDecl{},
+				file: syntax,
+			}
 			// 遍历文件中的声明
 			for _, decl := range syntax.Decls {
 				// 只处理函数声明
@@ -253,8 +282,11 @@ func (g *Generator) parsePackage(patterns []string, tags []string) {
 					pos := pkg.Fset.Position(funcDecl.Pos())
 					fmt.Printf("Found @timeout in %s at line %d for function %s: %s, type:%+v\n",
 						pos.Filename, pos.Line, funcDecl.Name.Name, comment.Text, funcDecl.Type)
-					g.timeFuncs = append(g.timeFuncs, funcDecl)
+					t.fns = append(t.fns, funcDecl)
 				}
+			}
+			if len(t.fns) > 0 {
+				g.timeFuncs = append(g.timeFuncs, t)
 			}
 		}
 	}
@@ -269,6 +301,7 @@ func (g *Generator) parsePackage(patterns []string, tags []string) {
 
 // addPackage adds a type checked Package and its syntax files to the generator.
 func (g *Generator) addPackage(pkg *packages.Package) {
+	g.rawPkg = pkg
 	g.pkg = &Package{
 		name:     pkg.Name,
 		defs:     pkg.TypesInfo.Defs,
@@ -287,37 +320,87 @@ func (g *Generator) addPackage(pkg *packages.Package) {
 	}
 }
 
-func (g *Generator) genImports() {
-	// 遍历文件中的声明
-	for _, fn := range g.timeFuncs {
-		if fn.Type.Params != nil {
-			for _, field := range fn.Type.Params.List {
-				typ := g.pkg.typeInfo.TypeOf(field.Type)
-				if named, ok := typ.(*types.Named); ok {
-					obj := named.Obj()
-					if obj != nil && obj.Pkg() != nil {
-						packageName := obj.Name()
-						if packageName == "Context" || packageName == "Time" {
-							continue
-						}
+type Elem interface {
+	Elem() types.Type
+}
 
-						g.Printf("import \"%s\"\n", obj.Pkg().Path())
+// getNamedType 递归解析类型，返回命名类型的包路径和名称
+func getNamedType(typ types.Type) types.Type {
+	if _, ok := typ.(*types.Named); ok {
+		return typ
+	}
+	elem, ok := typ.(Elem)
+	if ok {
+		return getNamedType(elem.Elem())
+	}
+
+	return nil
+}
+
+func (g *Generator) genImports() {
+	// 跳过当前包
+	exist := map[string]bool{
+		g.rawPkg.PkgPath: true,
+	}
+
+	// 遍历文件中的声明
+	for _, f := range g.timeFuncs {
+		aliases := f.getImportAliases()
+
+		for _, fn := range f.fns {
+			if fn.Type.Params != nil {
+				for _, field := range fn.Type.Params.List {
+					typ := g.pkg.typeInfo.TypeOf(field.Type)
+					typ = getNamedType(typ)
+
+					if named, ok := typ.(*types.Named); typ != nil && ok {
+						obj := named.Obj()
+						if obj != nil && obj.Pkg() != nil {
+							packageName := obj.Name()
+							if packageName == "Context" || packageName == "Time" {
+								continue
+							}
+
+							path := obj.Pkg().Path()
+							if _, ok := exist[path]; ok {
+								continue
+							}
+							exist[path] = true
+
+							if alias := aliases[path]; alias != "" {
+								g.Printf("import %s \"%s\"\n", alias, obj.Pkg().Path())
+							} else {
+								g.Printf("import \"%s\"\n", obj.Pkg().Path())
+							}
+						}
 					}
 				}
 			}
-		}
-		if fn.Type.Results != nil {
-			for _, field := range fn.Type.Results.List {
-				typ := g.pkg.typeInfo.TypeOf(field.Type)
-				if named, ok := typ.(*types.Named); ok {
-					obj := named.Obj()
-					if obj != nil && obj.Pkg() != nil {
-						packageName := obj.Name()
-						if packageName == "Context" || packageName == "Time" {
-							continue
-						}
+			if fn.Type.Results != nil {
+				for _, field := range fn.Type.Results.List {
+					typ := g.pkg.typeInfo.TypeOf(field.Type)
+					typ = getNamedType(typ)
 
-						g.Printf("import \"%s\"\n", obj.Pkg().Path())
+					if named, ok := typ.(*types.Named); ok {
+						obj := named.Obj()
+						if obj != nil && obj.Pkg() != nil {
+							packageName := obj.Name()
+							if packageName == "Context" || packageName == "Time" {
+								continue
+							}
+
+							path := obj.Pkg().Path()
+							if _, ok := exist[path]; ok {
+								continue
+							}
+							exist[path] = true
+
+							if alias := aliases[path]; alias != "" {
+								g.Printf("import %s \"%s\"\n", alias, obj.Pkg().Path())
+							} else {
+								g.Printf("import \"%s\"\n", obj.Pkg().Path())
+							}
+						}
 					}
 				}
 			}
