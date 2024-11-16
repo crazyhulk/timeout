@@ -13,6 +13,7 @@ import (
 	"os"
 	"path/filepath"
 	"strings"
+	"sync"
 
 	"golang.org/x/tools/go/packages"
 )
@@ -54,49 +55,63 @@ func main() {
 		return
 	}
 
-	paths := map[string]bool{}
+	eg := sync.WaitGroup{}
+	maxWorkers := 10
+	workChan := make(chan string, maxWorkers)
+
+	locker := sync.Mutex{}
+	paths := map[string][]string{}
 	// 列出当前目录及所有子目录中的 Go 包
 	if err := filepath.Walk(args[0], func(path string, info fs.FileInfo, err error) error {
 		if err != nil {
 			return err
 		}
-		// 检查是否是目录
-		// if !info.IsDir() {
-		// 	return err
-		// }
 
-		if paths[filepath.Dir(path)] {
-			return err
+		if info.IsDir() || strings.HasSuffix(info.Name(), ".go") {
+			return nil
 		}
 
-		// 仅检查 .go 文件
-		if !info.IsDir() /* && strings.HasSuffix(info.Name(), ".go") */ {
-			if containsString(path, "// @timeout") {
-				paths[filepath.Dir(path)] = true
+		go func() {
+			workChan <- path
+			defer func() { <-workChan }()
+			eg.Add(1)
+			defer eg.Done()
+			if !containsString(path, "// @timeout") {
+				return
 			}
-		}
+			locker.Lock()
+			defer locker.Unlock()
+			paths[filepath.Dir(path)] = append(paths[filepath.Dir(path)], path)
 
-		// 尝试获取包的信息
-		// pkg, err := build.ImportDir(path, 0)
-		// if err == nil {
-		// 	fmt.Println("=====", pkg.Name)
-		// 	// 打印包的名字
-		// 	paths = append(paths, args[0]+"/"+path)
-		// }
+			return
+		}()
+
 		return nil
 	}); err != nil {
 		log.Fatal(err)
 	}
-	for path := range paths {
+	eg.Wait()
+
+	eg = sync.WaitGroup{}
+	for path, patterns := range paths {
 		g := Generator{
 			trimPrefix:  *trimprefix,
 			lineComment: *linecomment,
 		}
 
-		g.genForPath(path, []string{args[0] + "/" + path}, []string{})
+		xpath := path
+		xpatterns := patterns
+		go func() {
+			workChan <- xpath
+			defer func() { <-workChan }()
+			eg.Add(1)
+			defer eg.Done()
+
+			g.genForPath(xpath, xpatterns, []string{})
+		}()
 	}
 
-	// g.parsePackage(args, tags)
+	eg.Wait()
 }
 
 // 检查文件中是否包含目标字符串
